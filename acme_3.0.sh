@@ -2,26 +2,23 @@
 set -e
 
 # ==================== Telegram 配置 ====================
-# 1. 找 @BotFather 获取 Token
-# 2. 找 @userinfobot 获取 Chat ID
 TG_BOT_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
 TG_CHAT_ID="1957625818"
 
-# 如果服务器在国内，请修改下方的域名为反代地址（例如：tgproxy.librespeed.org）
+# 自动切换：如果是国内服务器请修改此域名
 TG_API_DOMAIN="api.telegram.org"
 
-# TG 发送函数 (增加了超时检测和错误输出)
 send_tg() {
     local msg="$1"
     echo "📡 正在发送 TG 通知..."
     curl -s -m 10 -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT_ID}" \
         -d "text=${msg}" \
-        -d "parse_mode=HTML" || echo "⚠️ TG 通知发送失败，请检查网络或 Token。"
+        -d "parse_mode=HTML" || echo "⚠️ TG 通知发送失败"
 }
 # ======================================================
 
-# 启动即测试通知
+# 启动通知
 send_tg "🚀 <b>SSL 脚本已启动</b>%0A正在准备申请环境..."
 
 # 主菜单
@@ -38,9 +35,11 @@ while true; do
         1) break ;;
         2)
             echo "⚠️ 正在重置环境..."
-            rm -rf /tmp/acme
-            send_tg "🔄 正在重置 acme 环境..."
-            bash <(curl -fsSL https://githubusercontent.com)
+            rm -rf /root/.acme.sh
+            send_tg "🔄 正在重置 acme.sh 环境..."
+            # 修正后的安装命令
+            curl https://get.acme.sh | sh
+            echo "✅ 重置完成，请重新运行脚本。"
             exit 0
             ;;
         3) exit 0 ;;
@@ -64,7 +63,7 @@ case $CA_OPTION in
     *) echo "❌ 无效选项"; exit 1 ;;
 esac
 
-# 依赖与防火墙 (自动识别并处理)
+# 依赖安装
 . /etc/os-release
 OS=$ID
 echo "📦 正在安装依赖..."
@@ -75,32 +74,36 @@ elif [ "$OS" = "centos" ]; then
     sudo systemctl enable --now crond
 fi
 
-# 安装 acme.sh
-if ! command -v acme.sh >/dev/null 2>&1; then
-    curl https://acme.sh | sh
-    export PATH="$HOME/.acme.sh:$PATH"
+# 确保 acme.sh 路径正确
+ACME_BIN="$HOME/.acme.sh/acme.sh"
+if [ ! -f "$ACME_BIN" ]; then
+    echo "正在安装 acme.sh..."
+    curl https://get.acme.sh | sh
 fi
 
 # 注册并申请
-~/.acme.sh/acme.sh --register-account -m $EMAIL --server $CA_SERVER
+$ACME_BIN --register-account -m $EMAIL --server $CA_SERVER
 
 echo "🚀 正在向 ${CA_SERVER} 申请证书..."
-if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server $CA_SERVER; then
+send_tg "⏳ 正在申请证书: <code>$DOMAIN</code>"
+
+# 尝试申请 (standalone 模式)
+if ! $ACME_BIN --issue --standalone -d $DOMAIN --server $CA_SERVER; then
     echo "❌ 申请失败！"
-    send_tg "<b>❌ SSL 申请失败</b>%0A域名: <code>$DOMAIN</code>%0A原因: 验证失败，请检查 80 端口是否被占用。"
+    send_tg "<b>❌ SSL 申请失败</b>%0A域名: <code>$DOMAIN</code>%0A原因: 请检查 80 端口是否被 Nginx 占用。"
     exit 1
 fi
 
 # 安装证书到 root 目录
-~/.acme.sh/acme.sh --installcert -d $DOMAIN \
+$ACME_BIN --installcert -d $DOMAIN \
     --key-file       /root/${DOMAIN}.key \
     --fullchain-file /root/${DOMAIN}.crt
 
-# 自动续期脚本 (含 TG 通知)
+# 自动续期脚本
 cat << EOF > /root/renew_cert.sh
 #!/bin/bash
-export PATH="\$HOME/.acme.sh:\$PATH"
-if acme.sh --renew -d $DOMAIN --server $CA_SERVER; then
+ACME_BIN="\$HOME/.acme.sh/acme.sh"
+if \$ACME_BIN --renew -d $DOMAIN --server $CA_SERVER; then
     curl -s -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>✅ SSL 自动续期成功</b>%0A域名: <code>$DOMAIN</code>"
 else
     curl -s -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>⚠️ SSL 自动续期失败</b>%0A域名: <code>$DOMAIN</code>"
@@ -111,4 +114,4 @@ chmod +x /root/renew_cert.sh
 
 # 最终提示
 echo "✅ 证书申请成功！"
-send_tg "<b>✅ SSL 部署完成</b>%0A域名: <code>$DOMAIN</code>%0A证书: <code>/root/${DOMAIN}.crt</code>%0A私钥: <code>/root/${DOMAIN}.key</code>"
+send_tg "<b>✅ SSL 部署完成</b>%0A域名: <code>$DOMAIN</code>%0A证书: <code>/root/${DOMAIN}.crt</code>"
