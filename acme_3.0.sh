@@ -21,7 +21,7 @@ while true; do
             echo "✅ 已清空 /tmp/acme，准备重新部署。"
             echo "📦 正在重新执行 acme.sh ..."
             sleep 1
-            bash <(curl -fsSL https://raw.githubusercontent.com/slobys/SSL-Renewal/main/acme.sh)
+            bash <(curl -fsSL https://raw.githubusercontent.com/sgmjwbg/SSL-Renewal/main/acme.sh)
             exit 0
             ;;
         3)
