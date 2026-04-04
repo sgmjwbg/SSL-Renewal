@@ -2,26 +2,34 @@
 set -e
 
 # ==================== Telegram 配置 ====================
-# 请在这里填写你的机器人 Token 和 用户 ID
-TG_BOT_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
-TG_CHAT_ID="1957625818"
+# 1. 找 @BotFather 获取 Token
+# 2. 找 @userinfobot 获取 Chat ID
+TG_BOT_TOKEN="你的_BOT_TOKEN"
+TG_CHAT_ID="你的_CHAT_ID"
 
-# TG 发送函数
+# 如果服务器在国内，请修改下方的域名为反代地址（例如：tgproxy.librespeed.org）
+TG_API_DOMAIN="api.telegram.org"
+
+# TG 发送函数 (增加了超时检测和错误输出)
 send_tg() {
     local msg="$1"
-    curl -s -X POST "https://telegram.org{TG_BOT_TOKEN}/sendMessage" \
+    echo "📡 正在发送 TG 通知..."
+    curl -s -m 10 -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT_ID}" \
         -d "text=${msg}" \
-        -d "parse_mode=HTML" > /dev/null
+        -d "parse_mode=HTML" || echo "⚠️ TG 通知发送失败，请检查网络或 Token。"
 }
 # ======================================================
+
+# 启动即测试通知
+send_tg "🚀 <b>SSL 脚本已启动</b>%0A正在准备申请环境..."
 
 # 主菜单
 while true; do
     clear
-    echo "============== SSL证书管理菜单 (含TG通知) =============="
+    echo "============== SSL 证书管理 (集成 TG 通知) =============="
     echo "1）申请 SSL 证书"
-    echo "2）重置环境（清除申请记录并重新部署）"
+    echo "2）重置环境（清除记录并重新部署）"
     echo "3）退出"
     echo "========================================================"
     read -p "请输入选项（1-3）： " MAIN_OPTION
@@ -31,7 +39,7 @@ while true; do
         2)
             echo "⚠️ 正在重置环境..."
             rm -rf /tmp/acme
-            echo "✅ 已清空 /tmp/acme。"
+            send_tg "🔄 正在重置 acme 环境..."
             bash <(curl -fsSL https://githubusercontent.com)
             exit 0
             ;;
@@ -44,8 +52,8 @@ done
 read -p "请输入域名: " DOMAIN
 read -p "请输入电子邮件地址: " EMAIL
 
-echo "请选择证书颁发机构（CA）："
-echo "1）Let's Encrypt (注意频率限制)"
+echo "请选择 CA 机构："
+echo "1）Let's Encrypt (有频率限制)"
 echo "2）Buypass"
 echo "3）ZeroSSL (推荐)"
 read -p "输入选项（1-3）： " CA_OPTION
@@ -56,27 +64,16 @@ case $CA_OPTION in
     *) echo "❌ 无效选项"; exit 1 ;;
 esac
 
-# 防火墙逻辑
-read -p "是否关闭防火墙？(1.是 2.否): " FIREWALL_OPTION
-if [ "$FIREWALL_OPTION" -eq 2 ]; then
-    read -p "是否放行特定端口？(1.是 2.否): " PORT_OPTION
-    [ "$PORT_OPTION" -eq 1 ] && read -p "请输入端口号: " PORT
-fi
-
-# 依赖安装 (简略逻辑)
+# 依赖与防火墙 (自动识别并处理)
 . /etc/os-release
 OS=$ID
-case $OS in
-    ubuntu|debian)
-        sudo apt update -y && sudo apt install -y curl socat git cron
-        [ "$FIREWALL_OPTION" -eq 1 ] && sudo ufw disable || { [ "$PORT_OPTION" -eq 1 ] && sudo ufw allow $PORT; }
-        ;;
-    centos)
-        sudo yum install -y curl socat git cronie
-        sudo systemctl enable --now crond
-        [ "$FIREWALL_OPTION" -eq 1 ] && { sudo systemctl stop firewalld; sudo systemctl disable firewalld; } || { [ "$PORT_OPTION" -eq 1 ] && { sudo firewall-cmd --permanent --add-port=${PORT}/tcp; sudo firewall-cmd --reload; }; }
-        ;;
-esac
+echo "📦 正在安装依赖..."
+if [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
+    sudo apt update -y && sudo apt install -y curl socat git cron
+elif [ "$OS" = "centos" ]; then
+    sudo yum install -y curl socat git cronie
+    sudo systemctl enable --now crond
+fi
 
 # 安装 acme.sh
 if ! command -v acme.sh >/dev/null 2>&1; then
@@ -87,31 +84,31 @@ fi
 # 注册并申请
 ~/.acme.sh/acme.sh --register-account -m $EMAIL --server $CA_SERVER
 
-echo "🚀 正在申请证书，请稍候..."
+echo "🚀 正在向 ${CA_SERVER} 申请证书..."
 if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server $CA_SERVER; then
-    echo "❌ 证书申请失败！"
-    send_tg "<b>❌ SSL 申请失败</b>%0A域名: <code>$DOMAIN</code>%0A原因: 验证未通过，请检查端口占用或解析。"
+    echo "❌ 申请失败！"
+    send_tg "<b>❌ SSL 申请失败</b>%0A域名: <code>$DOMAIN</code>%0A原因: 验证失败，请检查 80 端口是否被占用。"
     exit 1
 fi
 
-# 安装证书
+# 安装证书到 root 目录
 ~/.acme.sh/acme.sh --installcert -d $DOMAIN \
     --key-file       /root/${DOMAIN}.key \
     --fullchain-file /root/${DOMAIN}.crt
 
-# 自动续期脚本 (集成 TG 通知)
+# 自动续期脚本 (含 TG 通知)
 cat << EOF > /root/renew_cert.sh
 #!/bin/bash
 export PATH="\$HOME/.acme.sh:\$PATH"
 if acme.sh --renew -d $DOMAIN --server $CA_SERVER; then
-    curl -s -X POST "https://telegram.org{TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>✅ SSL 自动续期成功</b>%0A域名: <code>$DOMAIN</code>"
+    curl -s -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>✅ SSL 自动续期成功</b>%0A域名: <code>$DOMAIN</code>"
 else
-    curl -s -X POST "https://telegram.org{TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>⚠️ SSL 自动续期失败</b>%0A域名: <code>$DOMAIN</code>%0A请检查服务器 80 端口是否被占用。"
+    curl -s -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>⚠️ SSL 自动续期失败</b>%0A域名: <code>$DOMAIN</code>"
 fi
 EOF
 chmod +x /root/renew_cert.sh
 (crontab -l 2>/dev/null | grep -v "renew_cert.sh"; echo "0 0 * * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
 
 # 最终提示
-echo "✅ 申请成功！"
-send_tg "<b>✅ SSL 证书已部署</b>%0A域名: <code>$DOMAIN</code>%0A证书路径: <code>/root/${DOMAIN}.crt</code>%0A续期任务已加入 crontab。"
+echo "✅ 证书申请成功！"
+send_tg "<b>✅ SSL 部署完成</b>%0A域名: <code>$DOMAIN</code>%0A证书: <code>/root/${DOMAIN}.crt</code>%0A私钥: <code>/root/${DOMAIN}.key</code>"
