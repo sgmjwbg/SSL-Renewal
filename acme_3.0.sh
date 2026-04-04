@@ -4,8 +4,8 @@ set -e
 # ==================== Telegram 配置 ====================
 # 1. 找 @BotFather 获取 Token
 # 2. 找 @userinfobot 获取 Chat ID
-TG_BOT_TOKEN="你的_BOT_TOKEN"
-TG_CHAT_ID="你的_CHAT_ID"
+TG_BOT_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
+TG_CHAT_ID="1957625818"
 
 # 如果服务器在国内，请修改下方的域名为反代地址（例如：tgproxy.librespeed.org）
 TG_API_DOMAIN="api.telegram.org"
