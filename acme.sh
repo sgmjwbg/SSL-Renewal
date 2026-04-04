@@ -38,7 +38,7 @@ fi
 
 # ========= 清理旧目录并继续 =========
 rm -rf /tmp/acme
-git clone https://github.com/slobys/SSL-Renewal.git /tmp/acme
+git clone https://github.com/sgmjwbg/SSL-Renewal.git /tmp/acme
 mv /tmp/acme/* /root
 chmod +x /root/acme_3.0.sh
 script -q -c "/root/acme_3.0.sh" /dev/null
