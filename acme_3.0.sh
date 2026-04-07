@@ -46,7 +46,7 @@ while true; do
             echo "📦 正在重新下载并执行脚本..."
             sleep 1
             # 使用正确的 raw 原始链接
-            bash <(curl -fsSL https://raw.githubusercontent.com/slobys/SSL-Renewal/main/acme.sh)
+            bash <(curl -fsSL https://raw.githubusercontent.com/sgmjwbg/SSL-Renewal/main/acme.sh)
             exit 0
             ;;
         3)
