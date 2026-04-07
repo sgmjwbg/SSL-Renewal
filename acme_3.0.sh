@@ -1,18 +1,35 @@
 #!/bin/bash
 set -e
 
-# --- 内置 TG 配置 ---
+# --- 1. 内置 TG 配置 ---
 TG_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
 TG_CHATID="7015616862"
+TG_API_HOST="api.telegram.org"
 
-# 推送函数
-send_tg() {
-    local msg=$1
-    curl -s -X POST "https://telegram.org" \
+# --- 2. 增强型推送函数 ---
+send_tg_notification() {
+    local message=$1
+    echo "正在发送 TG 推送测试..."
+    # 使用内置变量进行推送
+    RESPONSE=$(curl -s -X POST "https://$TG_API_HOST/bot$TG_TOKEN/sendMessage" \
         --data-urlencode "chat_id=$TG_CHATID" \
-        --data-urlencode "text=$msg" \
-        -d "parse_mode=HTML" > /dev/null
+        --data-urlencode "text=$message" \
+        -d "parse_mode=HTML")
+    
+    if echo "$RESPONSE" | grep -q '"ok":true'; then
+        echo "✅ Telegram 推送成功！"
+    else
+        echo "❌ Telegram 推送失败，详情: $RESPONSE"
+        echo "⚠️ 请确认你是否已在 Telegram 中点击了机器人的 [START] 按钮。"
+    fi
 }
+
+# --- 3. 脚本启动及环境检查 ---
+clear
+echo "============== SSL 证书管理 (内置推送版) =============="
+# 立即测试推送
+send_tg_notification "🔔 <b>SSL 脚本已启动</b>%0A━━━━━━━━━━━━━━%0A服务器已成功连接 TG 接口！%0A正在准备申请流程..."
+
 
 # 主菜单
 while true; do
