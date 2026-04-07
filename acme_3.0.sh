@@ -50,7 +50,7 @@ while true; do
             echo "📦 正在重新执行 acme.sh ..."
             sleep 1
             # 强制修复一次 DNS 确保下载成功
-            bash <(curl -fsSL https://raw.githubusercontent.com/slobys/SSL-Renewal/main/acme.sh)
+            bash <(curl -fsSL https://raw.githubusercontent.com/sgmjwbg/SSL-Renewal/main/acme.sh)
             exit 0 ;;
         3) exit 0 ;;
         *) continue ;;
