@@ -6,7 +6,7 @@ send_tg_notification() {
     local message=$1
     if [[ -n "$TG_TOKEN" && -n "$TG_CHATID" ]]; then
         # 转换换行符并进行 URL 编码处理（简单处理）
-        RESPONSE=$(curl -s -X POST "https://telegram.org" \
+        RESPONSE=$(curl -s -X POST "https://api.telegram.org" \
             --data-urlencode "chat_id=$TG_CHATID" \
             --data-urlencode "text=$message" \
             -d "parse_mode=HTML")
