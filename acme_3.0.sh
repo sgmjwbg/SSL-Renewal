@@ -112,7 +112,7 @@ if [ -n "\$OCCUPIED" ]; then
 fi
 EOF
 chmod +x /root/renew_cert.sh
-(crontab -l 2>/dev/null | grep -v "renew_cert.sh"; echo "0 0 * * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
+(crontab -l 2>/dev/null | grep -v "renew_cert.sh"; echo "0 0 1 * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
 
 # --- 10. 完成推送 ---
 send_tg "✅ <b>SSL 签发成功！</b>%0A━━━━━━━━━━━━━━%0A<b>域名：</b> <code>$DOMAIN</code>"
