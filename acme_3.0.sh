@@ -1,80 +1,138 @@
 #!/bin/bash
 set -e
 
-# ==================== Telegram 配置 ====================
-TG_BOT_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
-TG_CHAT_ID="1957625818"
-TG_API_DOMAIN="api.telegram.org"
+# --- 1. 推送函数定义 ---
+send_tg_notification() {
+    local message=$1
+    if [[ -n "$TG_TOKEN" && -n "$TG_CHATID" ]]; then
+        # 使用 curl 推送至 Telegram，消息经过 URL 编码以支持中文和换行
+        curl -s -X POST "https://telegram.org" \
+            -d "chat_id=$TG_CHATID" \
+            -d "text=$message" \
+            -d "parse_mode=HTML" > /dev/null
+    else
+        echo "⚠️ 未配置 TG 机器人信息，跳过推送。"
+    fi
+}
 
-# ==================== 0. 修复 DNS 解析 (新增) ====================
-echo "🔧 正在优化 DNS 配置以确保下载成功..."
-echo "nameserver 8.8.8.8" > /etc/resolv.conf
-echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+# --- 2. 主菜单 ---
+while true; do
+    clear
+    echo "============== SSL 证书管理菜单 (含中文推送) =============="
+    echo "1) 申请 SSL 证书"
+    echo "2) 重置环境 (清除申请记录并重新部署)"
+    echo "3) 退出"
+    echo "=========================================================="
+    read -p "请输入选项 (1-3): " MAIN_OPTION
 
-# ==================== 1. 环境准备 ====================
-. /etc/os-release
-OS=$ID
-echo "📦 正在安装基础依赖..."
-if [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
-    sudo apt update -y && sudo apt install -y curl socat cron
-elif [ "$OS" = "centos" ]; then
-    sudo yum install -y curl socat cronie
-    sudo systemctl enable --now crond
-fi
+    case $MAIN_OPTION in
+        1) break ;;
+        2)
+            echo "⚠️ 正在重置环境..."
+            rm -rf /tmp/acme
+            echo "✅ 已清空 /tmp/acme，准备重新部署。"
+            bash <(curl -fsSL https://githubusercontent.com)
+            exit 0
+            ;;
+        3) echo "👋 已退出。"; exit 0 ;;
+        *) echo "❌ 无效选项"; sleep 1; continue ;;
+    esac
+done
 
-# ==================== 2. 安装 acme.sh (改进版) ====================
-ACME_BIN="/root/.acme.sh/acme.sh"
-if [ ! -f "$ACME_BIN" ]; then
-    echo "📥 未检测到 acme.sh，正在从网络安装..."
-    # 使用 get.acme.sh 备用链接，成功率更高
-    curl https://get.acme.sh | sh || { echo "❌ 下载 acme.sh 失败，请检查网络！"; exit 1; }
-    # 强制让当前环境识别 acme.sh
-    source ~/.bashrc || true
-fi
-
-# 确保脚本有执行权限
-chmod +x "$ACME_BIN"
-
-# ==================== 3. 配置原生 TG 通知 ====================
-export TELEGRAM_TOKEN="$TG_BOT_TOKEN"
-export TELEGRAM_CHAT_ID="$TG_CHAT_ID"
-
-echo "🔔 正在配置 Telegram 通知..."
-"$ACME_BIN" --set-notify --notify-hook telegram \
-    --notify-level 2 \
-    --notify-mode 0
-
-echo "✅ Telegram 通知功能已开启"
-
-# ==================== 4. 申请逻辑 ====================
-read -p "请输入域名 (例如 example.com): " DOMAIN
+# --- 3. 用户输入 ---
+read -p "请输入域名: " DOMAIN
 read -p "请输入电子邮件地址: " EMAIL
+read -p "请输入 TG Bot Token (直接回车跳过): " TG_TOKEN
+read -p "请输入 TG Chat ID (直接回车跳过): " TG_CHATID
 
-echo "请选择 CA 机构：1) Let's Encrypt  2) Buypass  3) ZeroSSL"
-read -p "输入选项 (默认 3): " CA_OPTION
+echo "请选择证书颁发机构 (CA):"
+echo "1) Let's Encrypt"
+echo "2) Buypass"
+echo "3) ZeroSSL"
+read -p "输入选项 (1-3): " CA_OPTION
 case $CA_OPTION in
     1) CA_SERVER="letsencrypt" ;;
     2) CA_SERVER="buypass" ;;
-    *) CA_SERVER="zerossl" ;;
+    3) CA_SERVER="zerossl" ;;
+    *) echo "❌ 无效选项"; exit 1 ;;
 esac
 
-# 注册账号
-"$ACME_BIN" --register-account -m "$EMAIL" --server "$CA_SERVER"
+echo "是否关闭防火墙？(1.是 / 2.否)"
+read -p "输入选项: " FIREWALL_OPTION
 
-echo "🚀 正在申请证书 (Standalone 模式)..."
-# 自动尝试停止可能占用 80 端口的服务（可选）
-# systemctl stop nginx || true 
+if [ "$FIREWALL_OPTION" -eq 2 ]; then
+    read -p "是否放行特定端口？(1.是 / 2.否): " PORT_OPTION
+    if [ "$PORT_OPTION" -eq 1 ]; then
+        read -p "请输入要放行的端口号: " PORT
+    fi
+fi
 
-if ! "$ACME_BIN" --issue --standalone -d "$DOMAIN" --server "$CA_SERVER"; then
-    echo "❌ 申请失败！原因可能：1. 80端口被占用  2. 防火墙未开启80端口  3. 域名未解析到此IP"
+# --- 4. 系统依赖安装 ---
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+else
+    echo "❌ 无法识别操作系统"; exit 1
+fi
+
+case $OS in
+    ubuntu|debian)
+        sudo apt update -y && sudo apt install -y curl socat git cron
+        [[ "$FIREWALL_OPTION" -eq 1 ]] && sudo ufw disable || { [[ "$PORT_OPTION" -eq 1 ]] && sudo ufw allow $PORT; }
+        ;;
+    centos)
+        sudo yum update -y && sudo yum install -y curl socat git cronie
+        sudo systemctl start crond && sudo systemctl enable crond
+        [[ "$FIREWALL_OPTION" -eq 1 ]] && { sudo systemctl stop firewalld; sudo systemctl disable firewalld; } || \
+        { [[ "$PORT_OPTION" -eq 1 ]] && { sudo firewall-cmd --permanent --add-port=${PORT}/tcp; sudo firewall-cmd --reload; }; }
+        ;;
+    *) echo "❌ 不支持的操作系统: $OS"; exit 1 ;;
+esac
+
+# --- 5. acme.sh 安装 ---
+if ! command -v acme.sh >/dev/null 2>&1; then
+    curl https://acme.sh | sh
+    export PATH="$HOME/.acme.sh:$PATH"
+    ~/.acme.sh/acme.sh --upgrade
+fi
+
+# --- 6. 证书申请 ---
+~/.acme.sh/acme.sh --register-account -m $EMAIL --server $CA_SERVER
+
+if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server $CA_SERVER; then
+    # 失败推送
+    MSG="❌ <b>SSL 证书申请失败！</b>%0A━━━━━━━━━━━━━━%0A<b>域名：</b> $DOMAIN%0A<b>原因：</b> 签发过程出错，请检查日志。%0A<b>时间：</b> $(date '+%Y-%m-%d %H:%M:%S')"
+    send_tg_notification "$MSG"
+    
+    rm -f /root/${DOMAIN}.key /root/${DOMAIN}.crt
+    ~/.acme.sh/acme.sh --remove -d $DOMAIN
     exit 1
 fi
 
-# 安装证书
-"$ACME_BIN" --installcert -d "$DOMAIN" \
+# --- 7. 安装证书 ---
+~/.acme.sh/acme.sh --installcert -d $DOMAIN \
     --key-file       /root/${DOMAIN}.key \
     --fullchain-file /root/${DOMAIN}.crt
 
-echo "🎉 证书申请成功！"
-echo "证书位置: /root/${DOMAIN}.crt"
-echo "私钥位置: /root/${DOMAIN}.key"
+# --- 8. 自动续期脚本 (含中文推送) ---
+cat << EOF > /root/renew_cert.sh
+#!/bin/bash
+export PATH="\$HOME/.acme.sh:\$PATH"
+if acme.sh --renew -d $DOMAIN --server $CA_SERVER; then
+    curl -s -X POST "https://telegram.org" \
+        -d "chat_id=$TG_CHATID" \
+        -d "text=🔄 <b>SSL 证书续期成功</b>%0A━━━━━━━━━━━━━━%0A<b>域名：</b> $DOMAIN%0A<b>状态：</b> 证书已更新并应用。" \
+        -d "parse_mode=HTML"
+fi
+EOF
+chmod +x /root/renew_cert.sh
+(crontab -l 2>/dev/null | grep -v "renew_cert.sh"; echo "0 0 * * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
+
+# --- 9. 完成提示 ---
+# 成功推送
+MSG="✅ <b>SSL 证书申请成功！</b>%0A━━━━━━━━━━━━━━%0A<b>域名：</b> $DOMAIN%0A<b>机构：</b> $CA_SERVER%0A<b>续期：</b> 已开启每日检测%0A<b>时间：</b> $(date '+%Y-%m-%d %H:%M:%S')"
+send_tg_notification "$MSG"
+
+echo "✅ 恭喜！SSL 证书已成功签发。"
+echo "📄 证书位置: /root/${DOMAIN}.crt"
+echo "🔐 私钥位置: /root/${DOMAIN}.key"
