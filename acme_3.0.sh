@@ -1,31 +1,44 @@
 #!/bin/bash
-set -e
+# set -e
 
-# --- 1. 核心配置 (已填入你的信息) ---
+# --- 1. 内置 TG 配置 ---
 TG_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
 TG_CHATID="7015616862"
+TG_API_HOST="api.telegram.org"
 
-# --- 2. 核心推送函数 (置顶定义) ---
+# --- 2. 强制 IPv4 推送函数 (核心加固) ---
 send_tg() {
     local msg=$1
-    # 打印调试信息到屏幕
-    echo "正在推送 TG 通知..."
-    curl -s -X POST "https://telegram.org" \
+    echo "正在通过 $TG_API_HOST 推送 TG 通知..."
+    # 使用 -4 强制走 IPv4，避免部分服务器 IPv6 路由不通导致丢包
+    RESPONSE=$(curl -4 -s --connect-timeout 10 -X POST "https://$TG_API_HOST/bot$TG_TOKEN/sendMessage" \
         --data-urlencode "chat_id=$TG_CHATID" \
         --data-urlencode "text=$msg" \
-        -d "parse_mode=HTML" > /dev/null
+        -d "parse_mode=HTML")
+    
+    if echo "$RESPONSE" | grep -q '"ok":true'; then
+        echo "✅ Telegram 推送成功！"
+    else
+        echo "❌ 推送失败: $RESPONSE"
+        echo "💡 提示：如果显示 chat not found，请务必先在 TG 机器人点 [START]！"
+    fi
 }
 
-# --- 3. 启动即测试 ---
+# --- 3. 启动修复与测试 ---
 clear
-echo "============== SSL 证书管理 (TG 推送加固版) =============="
-send_tg "🔔 <b>脚本已启动</b>%0A━━━━━━━━━━━━━━%0A服务器连接成功，准备进入菜单。"
+# 强制重置 DNS 环境
+chattr -i /etc/resolv.conf >/dev/null 2>&1 || true
+echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
+
+echo "============== SSL 证书管理 (TG 内置推送版) =============="
+send_tg "🔔 <b>SSL 脚本已启动</b>%0A━━━━━━━━━━━━━━%0A服务器已连接 $TG_API_HOST！"
 
 # --- 4. 主菜单 ---
 while true; do
     echo "1）申请 SSL 证书"
     echo "2）重置环境（清除申请记录并重新部署）"
     echo "3）退出"
+    echo "============================================"
     read -p "请输入选项（1-3）： " MAIN_OPTION
 
     case $MAIN_OPTION in
@@ -33,72 +46,56 @@ while true; do
         2)
             echo "⚠️ 正在重置环境..."
             rm -rf /tmp/acme
-            echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
-            bash <(curl -fsSL https://raw.githubusercontent.com/sgmjwbg/SSL-Renewal/main/acme.sh)
+            echo "✅ 已清空 /tmp/acme，准备重新部署。"
+            echo "📦 正在重新执行 acme.sh ..."
+            sleep 1
+            # 强制修复一次 DNS 确保下载成功
+            bash <(curl -fsSL https://raw.githubusercontent.com/slobys/SSL-Renewal/main/acme.sh)
             exit 0 ;;
         3) exit 0 ;;
         *) continue ;;
     esac
 done
 
-# --- 5. 获取域名与参数 ---
+# --- 5. 获取参数 ---
 read -p "请输入域名: " DOMAIN
 read -p "请输入电子邮件地址: " EMAIL
-
-# 任务开始推送
 send_tg "🚀 <b>任务开始</b>%0A域名：<code>$DOMAIN</code>"
 
-echo "请选择 CA: 1) Let's Encrypt | 2) Buypass | 3) ZeroSSL"
-read -p "选项: " CA_OPTION
-case $CA_OPTION in
-    1) CA_SERVER="letsencrypt" ;;
-    2) CA_SERVER="buypass" ;;
-    3) CA_SERVER="zerossl" ;;
-    *) exit 1 ;;
-esac
-
-# --- 6. 系统依赖与防火墙 ---
-. /etc/os-release
-if [[ "$ID" == "ubuntu" || "$ID" == "debian" ]]; then
-    apt update -y && apt install -y curl socat git cron lsof
-elif [[ "$ID" == "centos" ]]; then
-    yum install -y curl socat git cronie lsof
-    systemctl start crond && systemctl enable crond
+# --- 6. 自动处理 80 端口占用 ---
+if command -v lsof >/dev/null 2>&1; then
+    OCCUPIED_PID=$(lsof -i:80 -t | head -n 1)
+    if [ -n "$OCCUPIED_PID" ]; then
+        SERVICE_NAME=$(ps -p $OCCUPIED_PID -o comm=)
+        echo "⚠️ 停止 $SERVICE_NAME (80端口)..."
+        systemctl stop $SERVICE_NAME || kill -9 $OCCUPIED_PID
+        sleep 2
+    fi
 fi
 
-# --- 7. 自动处理 80 端口占用 (Nginx 冲突) ---
-OCCUPIED_PID=$(lsof -i:80 -t | head -n 1)
-SERVICE_NAME="none"
-if [ -n "$OCCUPIED_PID" ]; then
-    SERVICE_NAME=$(ps -p $OCCUPIED_PID -o comm=)
-    echo "⚠️ 停止 $SERVICE_NAME (80端口)..."
-    systemctl stop $SERVICE_NAME || kill -9 $OCCUPIED_PID
-    sleep 2
-fi
-
-# --- 8. 安装 acme.sh ---
+# --- 7. 安装 acme.sh ---
 if ! command -v acme.sh >/dev/null 2>&1; then
-    curl https://acme.sh | sh
+    curl https://acme.sh | sh -s email=$EMAIL
     export PATH="$HOME/.acme.sh:$PATH"
 fi
 
-# --- 9. 注册并签发 ---
-~/.acme.sh/acme.sh --register-account -m $EMAIL --server $CA_SERVER
+# --- 8. 申请证书 ---
+~/.acme.sh/acme.sh --register-account -m $EMAIL --server letsencrypt
 
-if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server $CA_SERVER --listen-v4; then
-    send_tg "❌ <b>签发失败</b>%0A域名：$DOMAIN"
-    [[ "$SERVICE_NAME" != "none" ]] && systemctl start $SERVICE_NAME
+if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server letsencrypt --listen-v4; then
+    send_tg "❌ <b>SSL 签发失败</b>%0A域名：$DOMAIN"
+    [ -n "$SERVICE_NAME" ] && systemctl start $SERVICE_NAME
     exit 1
 fi
 
-# 恢复 Nginx
-[[ "$SERVICE_NAME" != "none" ]] && systemctl start $SERVICE_NAME
+# 恢复服务
+[ -n "$SERVICE_NAME" ] && systemctl start $SERVICE_NAME
 
 # 安装证书
 ~/.acme.sh/acme.sh --installcert -d $DOMAIN \
     --key-file /root/${DOMAIN}.key --fullchain-file /root/${DOMAIN}.crt
 
-# --- 10. 自动续期脚本 (内置变量) ---
+# --- 9. 自动续期脚本 ---
 cat << EOF > /root/renew_cert.sh
 #!/bin/bash
 export PATH="\$HOME/.acme.sh:\$PATH"
@@ -106,8 +103,8 @@ OCCUPIED=\$(lsof -i:80 -t | head -n 1)
 if [ -n "\$OCCUPIED" ]; then
     SVC=\$(ps -p \$OCCUPIED -o comm=)
     systemctl stop \$SVC
-    if acme.sh --renew -d $DOMAIN --server $CA_SERVER --listen-v4; then
-        curl -s -X POST "https://telegram.org" \
+    if acme.sh --renew -d $DOMAIN --server letsencrypt --listen-v4; then
+        curl -4 -s -X POST "https://$TG_API_HOST/bot$TG_TOKEN/sendMessage" \
             -d "chat_id=$TG_CHATID" -d "parse_mode=HTML" \
             -d "text=🔄 <b>SSL 证书自动续期成功</b>%0A域名：$DOMAIN"
     fi
@@ -117,7 +114,6 @@ EOF
 chmod +x /root/renew_cert.sh
 (crontab -l 2>/dev/null | grep -v "renew_cert.sh"; echo "0 0 * * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
 
-# --- 11. 最终成功推送 ---
-send_tg "✅ <b>SSL 签发成功！</b>%0A━━━━━━━━━━━━━━%0A<b>域名：</b> <code>$DOMAIN</code>%0A<b>位置：</b> /root/${DOMAIN}.crt"
-
-echo "✅ 任务完成！"
+# --- 10. 完成推送 ---
+send_tg "✅ <b>SSL 签发成功！</b>%0A━━━━━━━━━━━━━━%0A<b>域名：</b> <code>$DOMAIN</code>"
+echo "✅ 证书签发完成，已开启自动续期。"
