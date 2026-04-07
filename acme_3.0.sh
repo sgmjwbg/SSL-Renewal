@@ -1,156 +1,80 @@
 #!/bin/bash
 set -e
 
-# 主菜单
-while true; do
-    clear
-    echo "============== SSL证书管理菜单 =============="
-    echo "1）申请 SSL 证书"
-    echo "2）重置环境（清除申请记录并重新部署）"
-    echo "3）退出"
-    echo "============================================"
-    read -p "请输入选项（1-3）： " MAIN_OPTION
+# ==================== Telegram 配置 ====================
+# 请确保以下信息准确，acme.sh 会将其永久保存在 account.conf 中
+TG_BOT_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
+TG_CHAT_ID="1957625818"
 
-    case $MAIN_OPTION in
-        1)
-            break
-            ;;
-        2)
-            echo "⚠️ 正在重置环境..."
-            rm -rf /tmp/acme
-            echo "✅ 已清空 /tmp/acme，准备重新部署。"
-            echo "📦 正在重新执行 acme.sh ..."
-            sleep 1
-            bash <(curl -fsSL https://raw.githubusercontent.com/slobys/SSL-Renewal/main/acme.sh)
-            exit 0
-            ;;
-        3)
-            echo "👋 已退出。"
-            exit 0
-            ;;
-        *)
-            echo "❌ 无效选项，请重新输入。"
-            sleep 1
-            continue
-            ;;
-    esac
-done
+# ==================== 1. 环境准备 ====================
+. /etc/os-release
+OS=$ID
+echo "📦 正在安装基础依赖..."
+if [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
+    sudo apt update -y && sudo apt install -y curl socat cron
+elif [ "$OS" = "centos" ] || [ "$OS" = "rhel" ]; then
+    sudo yum install -y curl socat cronie
+    sudo systemctl enable --now crond
+fi
 
-# 用户输入参数
-read -p "请输入域名: " DOMAIN
-read -p "请输入电子邮件地址: " EMAIL
+# 安装 acme.sh (如果没安装)
+ACME_BIN="/root/.acme.sh/acme.sh"
+if [ ! -f "$ACME_BIN" ]; then
+    echo "📥 正在安装 acme.sh 核心..."
+    curl https://acme.sh | sh
+fi
 
-echo "请选择证书颁发机构（CA）："
-echo "1）Let's Encrypt"
-echo "2）Buypass"
-echo "3）ZeroSSL"
-read -p "输入选项（1-3）： " CA_OPTION
+# ==================== 2. 配置 Telegram 通知 ====================
+# 修正为 acme.sh 官方识别的标准变量名
+export TELEGRAM_BOT_APITOKEN="$TG_BOT_TOKEN"
+export TELEGRAM_BOT_CHATID="$TG_CHAT_ID"
+
+echo "🔔 正在关联 Telegram 通知钩子..."
+$ACME_BIN --set-notify --notify-hook telegram --notify-level 2 --notify-mode 0
+
+# ==================== 3. 申请逻辑 ====================
+read -p "请输入域名 (例如 example.com): " DOMAIN
+read -p "请输入联系邮箱 (用于证书过期提醒): " EMAIL
+
+echo "请选择 CA 机构：1) Let's Encrypt  2) Buypass  3) ZeroSSL (默认)"
+read -p "输入选项 [1-3]: " CA_OPTION
 case $CA_OPTION in
     1) CA_SERVER="letsencrypt" ;;
     2) CA_SERVER="buypass" ;;
-    3) CA_SERVER="zerossl" ;;
-    *) echo "❌ 无效选项"; exit 1 ;;
+    *) CA_SERVER="zerossl" ;;
 esac
 
-echo "是否关闭防火墙？"
-echo "1）是"
-echo "2）否"
-read -p "输入选项（1 或 2）：" FIREWALL_OPTION
-
-if [ "$FIREWALL_OPTION" -eq 2 ]; then
-    echo "是否放行特定端口？"
-    echo "1）是"
-    echo "2）否"
-    read -p "输入选项（1 或 2）：" PORT_OPTION
-    if [ "$PORT_OPTION" -eq 1 ]; then
-        read -p "请输入要放行的端口号: " PORT
-    fi
-else
-    PORT_OPTION=0
+# 检查并临时停止 Nginx (Standalone 模式必须占用 80 端口)
+NGINX_RUNNING=false
+if pgrep -x "nginx" > /dev/null; then
+    echo "🛑 检测到 Nginx 正在运行，正在尝试临时停止以释放 80 端口..."
+    systemctl stop nginx
+    NGINX_RUNNING=true
 fi
 
-# 检查系统类型
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-else
-    echo "❌ 无法识别操作系统，请手动安装依赖。"
+# 注册账号
+$ACME_BIN --register-account -m $EMAIL --server $CA_SERVER
+
+echo "🚀 正在通过 Standalone 模式申请证书..."
+if ! $ACME_BIN --issue --standalone -d $DOMAIN --server $CA_SERVER; then
+    echo "❌ 申请失败！"
+    # 如果失败了也要记得把 Nginx 开启回来
+    [ "$NGINX_RUNNING" = true ] && systemctl start nginx
     exit 1
 fi
 
-# 安装依赖项，配置防火墙
-case $OS in
-    ubuntu|debian)
-        sudo apt update -y
-        sudo apt upgrade -y
-        sudo apt install -y curl socat git cron
-        if [ "$FIREWALL_OPTION" -eq 1 ]; then
-            if command -v ufw >/dev/null 2>&1; then
-                sudo ufw disable
-            else
-                echo "⚠️ UFW 未安装，跳过关闭防火墙。"
-            fi
-        elif [ "$PORT_OPTION" -eq 1 ]; then
-            if command -v ufw >/dev/null 2>&1; then
-                sudo ufw allow $PORT
-            else
-                echo "⚠️ UFW 未安装，跳过端口放行。"
-            fi
-        fi
-        ;;
-    centos)
-        sudo yum update -y
-        sudo yum install -y curl socat git cronie
-        sudo systemctl start crond
-        sudo systemctl enable crond
-        if [ "$FIREWALL_OPTION" -eq 1 ]; then
-            sudo systemctl stop firewalld
-            sudo systemctl disable firewalld
-        elif [ "$PORT_OPTION" -eq 1 ]; then
-            sudo firewall-cmd --permanent --add-port=${PORT}/tcp
-            sudo firewall-cmd --reload
-        fi
-        ;;
-    *)
-        echo "❌ 不支持的操作系统：$OS"
-        exit 1
-        ;;
-esac
-
-# 安装 acme.sh（如未装）
-if ! command -v acme.sh >/dev/null 2>&1; then
-    curl https://get.acme.sh | sh
-    export PATH="$HOME/.acme.sh:$PATH"
-    ~/.acme.sh/acme.sh --upgrade
-fi
-
-# 注册账户
-~/.acme.sh/acme.sh --register-account -m $EMAIL --server $CA_SERVER
-
-# 申请证书
-if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server $CA_SERVER; then
-    echo "❌ 证书申请失败，正在清理。"
-    rm -f /root/${DOMAIN}.key /root/${DOMAIN}.crt
-    ~/.acme.sh/acme.sh --remove -d $DOMAIN
-    rm -rf ~/.acme.sh/${DOMAIN}
-    exit 1
-fi
-
-# 安装证书
-~/.acme.sh/acme.sh --installcert -d $DOMAIN \
+# 安装证书到指定路径
+$ACME_BIN --installcert -d $DOMAIN \
     --key-file       /root/${DOMAIN}.key \
     --fullchain-file /root/${DOMAIN}.crt
 
-# 自动续期脚本
-cat << EOF > /root/renew_cert.sh
-#!/bin/bash
-export PATH="\$HOME/.acme.sh:\$PATH"
-acme.sh --renew -d $DOMAIN --server $CA_SERVER
-EOF
-chmod +x /root/renew_cert.sh
-(crontab -l 2>/dev/null; echo "0 0 * * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
+# 恢复 Nginx 运行
+if [ "$NGINX_RUNNING" = true ]; then
+    echo "▶️ 正在重新启动 Nginx..."
+    systemctl start nginx
+fi
 
-# 完成提示
-echo "✅ SSL证书申请完成！"
-echo "📄 证书路径: /root/${DOMAIN}.crt"
-echo "🔐 私钥路径: /root/${DOMAIN}.key"
+echo "🎉 证书申请成功并已开启自动续期！"
+echo "✅ 证书路径: /root/${DOMAIN}.crt"
+echo "✅ 私钥路径: /root/${DOMAIN}.key"
+echo "📬 如果配置正确，你的 Telegram 现在应该已经收到了通知。"
