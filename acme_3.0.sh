@@ -4,114 +4,64 @@ set -e
 # ==================== Telegram 配置 ====================
 TG_BOT_TOKEN="2103490652:AAHr_Z3LKZIX-3fv4gvP28HnfldADjrp9os"
 TG_CHAT_ID="1957625818"
-
-# 自动切换：如果是国内服务器请修改此域名
+# 如果是国内服务器，acme.sh 原生支持代理，或者你可以保持 API 域名设置
 TG_API_DOMAIN="api.telegram.org"
 
-send_tg() {
-    local msg="$1"
-    echo "📡 正在发送 TG 通知..."
-    curl -s -m 10 -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${TG_CHAT_ID}" \
-        -d "text=${msg}" \
-        -d "parse_mode=HTML" || echo "⚠️ TG 通知发送失败"
-}
-# ======================================================
-
-# 启动通知
-send_tg "🚀 <b>SSL 脚本已启动</b>%0A正在准备申请环境..."
-
-# 主菜单
-while true; do
-    clear
-    echo "============== SSL 证书管理 (集成 TG 通知) =============="
-    echo "1）申请 SSL 证书"
-    echo "2）重置环境（清除记录并重新部署）"
-    echo "3）退出"
-    echo "========================================================"
-    read -p "请输入选项（1-3）： " MAIN_OPTION
-
-    case $MAIN_OPTION in
-        1) break ;;
-        2)
-            echo "⚠️ 正在重置环境..."
-            rm -rf /root/.acme.sh
-            send_tg "🔄 正在重置 acme.sh 环境..."
-            # 修正后的安装命令
-            curl https://get.acme.sh | sh
-            echo "✅ 重置完成，请重新运行脚本。"
-            exit 0
-            ;;
-        3) exit 0 ;;
-        *) echo "❌ 无效选项"; sleep 1; continue ;;
-    esac
-done
-
-# 用户输入
-read -p "请输入域名: " DOMAIN
-read -p "请输入电子邮件地址: " EMAIL
-
-echo "请选择 CA 机构："
-echo "1）Let's Encrypt (有频率限制)"
-echo "2）Buypass"
-echo "3）ZeroSSL (推荐)"
-read -p "输入选项（1-3）： " CA_OPTION
-case $CA_OPTION in
-    1) CA_SERVER="letsencrypt" ;;
-    2) CA_SERVER="buypass" ;;
-    3) CA_SERVER="zerossl" ;;
-    *) echo "❌ 无效选项"; exit 1 ;;
-esac
-
-# 依赖安装
+# ==================== 1. 环境准备 ====================
 . /etc/os-release
 OS=$ID
 echo "📦 正在安装依赖..."
 if [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
-    sudo apt update -y && sudo apt install -y curl socat git cron
+    sudo apt update -y && sudo apt install -y curl socat cron
 elif [ "$OS" = "centos" ]; then
-    sudo yum install -y curl socat git cronie
+    sudo yum install -y curl socat cronie
     sudo systemctl enable --now crond
 fi
 
-# 确保 acme.sh 路径正确
-ACME_BIN="$HOME/.acme.sh/acme.sh"
+# 安装 acme.sh (如果没安装)
+ACME_BIN="/root/.acme.sh/acme.sh"
 if [ ! -f "$ACME_BIN" ]; then
-    echo "正在安装 acme.sh..."
-    curl https://get.acme.sh | sh
+    curl https://acme.sh | sh
 fi
 
-# 注册并申请
+# ==================== 2. 配置原生 TG 通知 ====================
+# 这一步非常重要：让 acme.sh 记住你的 TG 信息
+export TELEGRAM_TOKEN="$TG_BOT_TOKEN"
+export TELEGRAM_CHAT_ID="$TG_CHAT_ID"
+
+$ACME_BIN --set-notify --notify-hook telegram \
+    --notify-level 2 \
+    --notify-mode 0
+
+echo "✅ Telegram 通知功能已全局开启（续期成功/失败都会推送）"
+
+# ==================== 3. 申请逻辑 ====================
+read -p "请输入域名: " DOMAIN
+read -p "请输入电子邮件地址: " EMAIL
+
+echo "请选择 CA 机构：1) Let's Encrypt  2) Buypass  3) ZeroSSL"
+read -p "输入选项: " CA_OPTION
+case $CA_OPTION in
+    1) CA_SERVER="letsencrypt" ;;
+    2) CA_SERVER="buypass" ;;
+    *) CA_SERVER="zerossl" ;;
+esac
+
+# 注册账号
 $ACME_BIN --register-account -m $EMAIL --server $CA_SERVER
 
-echo "🚀 正在向 ${CA_SERVER} 申请证书..."
-send_tg "⏳ 正在申请证书: <code>$DOMAIN</code>"
-
-# 尝试申请 (standalone 模式)
+echo "🚀 正在申请证书 (Standalone 模式)..."
+# 注意：如果 80 端口被 Nginx 占用，这里会报错
 if ! $ACME_BIN --issue --standalone -d $DOMAIN --server $CA_SERVER; then
-    echo "❌ 申请失败！"
-    send_tg "<b>❌ SSL 申请失败</b>%0A域名: <code>$DOMAIN</code>%0A原因: 请检查 80 端口是否被 Nginx 占用。"
+    echo "❌ 申请失败！请确保 80 端口未被占用。"
     exit 1
 fi
 
-# 安装证书到 root 目录
+# 安装证书
 $ACME_BIN --installcert -d $DOMAIN \
     --key-file       /root/${DOMAIN}.key \
     --fullchain-file /root/${DOMAIN}.crt
 
-# 自动续期脚本
-cat << EOF > /root/renew_cert.sh
-#!/bin/bash
-ACME_BIN="\$HOME/.acme.sh/acme.sh"
-if \$ACME_BIN --renew -d $DOMAIN --server $CA_SERVER; then
-    curl -s -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>✅ SSL 自动续期成功</b>%0A域名: <code>$DOMAIN</code>"
-else
-    curl -s -X POST "https://${TG_API_DOMAIN}/bot${TG_BOT_TOKEN}/sendMessage" -d "chat_id=${TG_CHAT_ID}" -d "parse_mode=HTML" -d "text=<b>⚠️ SSL 自动续期失败</b>%0A域名: <code>$DOMAIN</code>"
-fi
-EOF
-chmod +x /root/renew_cert.sh
-(crontab -l 2>/dev/null | grep -v "renew_cert.sh"; echo "0 0 * * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
-
-# 最终提示
-echo "✅ 证书申请成功！"
-send_tg "<b>✅ SSL 部署完成</b>%0A域名: <code>$DOMAIN</code>%0A证书: <code>/root/${DOMAIN}.crt</code>"
+echo "🎉 证书申请成功！"
+echo "证书位置: /root/${DOMAIN}.crt"
+echo "私钥位置: /root/${DOMAIN}.key"
