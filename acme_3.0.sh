@@ -65,6 +65,19 @@ done
 read -p "请输入要申请的域名 (例如 example.com): " DOMAIN
 read -p "请输入联系电子邮件: " EMAIL
 
+# --- 加入 DNS 模式选择 ---
+echo "请选择验证方式:"
+echo "1) HTTP 模式 (需 80 端口)"
+echo "2) DNS API 模式 (Cloudflare)"
+read -p "请输入选项 (1-2): " AUTH_METHOD
+
+if [ "$AUTH_METHOD" == "2" ]; then
+    read -p "请输入 Cloudflare Email: " CF_Email
+    read -p "请输入 Cloudflare API Key: " CF_Key
+    export CF_Email="$CF_Email"
+    export CF_Key="$CF_Key"
+fi
+
 # --- 5. 安装依赖与端口检查 ---
 . /etc/os-release
 if [[ "$ID" == "ubuntu" || "$ID" == "debian" ]]; then
@@ -74,36 +87,52 @@ elif [[ "$ID" == "centos" ]]; then
     systemctl start crond && systemctl enable crond
 fi
 
-OCCUPIED_PID=$(lsof -i:80 -t | head -n 1)
-SERVICE_NAME="none"
-if [ -n "$OCCUPIED_PID" ]; then
-    SERVICE_NAME=$(ps -p $OCCUPIED_PID -o comm=)
-    echo "⚠️ 发现 $SERVICE_NAME 占用 80 端口，正在停止以释放环境..."
-    systemctl stop $SERVICE_NAME || kill -9 $OCCUPIED_PID
-    sleep 2
+# 仅在 HTTP 模式下检查端口
+if [ "$AUTH_METHOD" != "2" ]; then
+    OCCUPIED_PID=$(lsof -i:80 -t | head -n 1)
+    SERVICE_NAME="none"
+    if [ -n "$OCCUPIED_PID" ]; then
+        SERVICE_NAME=$(ps -p $OCCUPIED_PID -o comm=)
+        echo "⚠️ 发现 $SERVICE_NAME 占用 80 端口，正在停止以释放环境..."
+        systemctl stop $SERVICE_NAME || kill -9 $OCCUPIED_PID
+        sleep 2
+    fi
 fi
 
 # --- 6. 安装 acme.sh ---
 if ! command -v acme.sh >/dev/null 2>&1; then
-    curl https://acme.sh | sh -s email=$EMAIL
+    curl https://get.acme.sh | sh -s email=$EMAIL
     export PATH="$HOME/.acme.sh:$PATH"
 fi
 
 # 注册账户与签发证书
 ~/.acme.sh/acme.sh --register-account -m $EMAIL --server letsencrypt
 
-if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server letsencrypt --listen-v4; then
+# --- 修改签发逻辑以支持 DNS ---
+if [ "$AUTH_METHOD" == "2" ]; then
+    # DNS 申请方式 (支持泛域名)
+    if ! ~/.acme.sh/acme.sh --issue --dns dns_cf -d $DOMAIN -d *.$DOMAIN --server letsencrypt; then
+        ISSUE_FAILED=1
+    fi
+else
+    # 原有的 HTTP 申请方式
+    if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --server letsencrypt --listen-v4; then
+        ISSUE_FAILED=1
+    fi
+fi
+
+if [ "$ISSUE_FAILED" == "1" ]; then
     FAILURE_MSG="❌ <b>SSL 证书签发失败</b>
 ━━━━━━━━━━━━━━
 <b>域名：</b> <code>$DOMAIN</code>
-<b>原因：</b> 验证未通过，请检查 DNS 解析或 80 端口。"
+<b>原因：</b> 验证未通过，请检查 DNS 解析、API Key 或 80 端口。"
     send_tg "$FAILURE_MSG"
-    [ -n "$SERVICE_NAME" ] && systemctl start $SERVICE_NAME
+    [ -n "$SERVICE_NAME" ] && [ "$SERVICE_NAME" != "none" ] && systemctl start $SERVICE_NAME
     exit 1
 fi
 
 # 恢复服务
-[ -n "$SERVICE_NAME" ] && systemctl start $SERVICE_NAME
+[ -n "$SERVICE_NAME" ] && [ "$SERVICE_NAME" != "none" ] && systemctl start $SERVICE_NAME
 
 # 安装证书到 /root 目录
 ~/.acme.sh/acme.sh --installcert -d $DOMAIN \
@@ -145,6 +174,7 @@ chmod +x /root/renew_cert.sh
 SUCCESS_MSG="✅ <b>SSL 证书签发成功！</b>
 ━━━━━━━━━━━━━━
 <b>域名：</b> <code>$DOMAIN</code>
+<b>方式：</b> $([ "$AUTH_METHOD" == "2" ] && echo "DNS API" || echo "HTTP 80")
 <b>有效期：</b> 90天 (已设每月 1 号自动续期)
 <b>证书位置：</b> <code>/root/${DOMAIN}.crt</code>
 <b>私钥位置：</b> <code>/root/${DOMAIN}.key</code>
