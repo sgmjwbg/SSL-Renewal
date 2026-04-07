@@ -53,7 +53,7 @@ while true; do
             sleep 1
             # 强制修复一次 DNS 确保下载成功
             echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
-            bash <(curl -fsSL https://raw.githubusercontent.com/slobys/SSL-Renewal/main/acme.sh)
+            bash <(curl -fsSL https://raw.githubusercontent.com/sgmjwbg/SSL-Renewal/main/acme.sh)
             exit 0
             ;;
         3)
