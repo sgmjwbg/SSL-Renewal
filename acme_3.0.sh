@@ -138,6 +138,19 @@ fi
 ~/.acme.sh/acme.sh --installcert -d $DOMAIN \
     --key-file /root/${DOMAIN}.key --fullchain-file /root/${DOMAIN}.crt
 
+# --- 新增：自动创建目录并移动证书 ---
+SSL_DIR="/etc/nginx/ssl"
+if [ ! -d "$SSL_DIR" ]; then
+    mkdir -p "$SSL_DIR"
+    echo "📂 已创建目录: $SSL_DIR"
+fi
+cp "/root/${DOMAIN}.crt" "${SSL_DIR}/${DOMAIN}.crt"
+cp "/root/${DOMAIN}.key" "${SSL_DIR}/${DOMAIN}.key"
+chmod 644 "${SSL_DIR}/${DOMAIN}.crt"
+chmod 600 "${SSL_DIR}/${DOMAIN}.key"
+# 尝试设置权限，适配常见 Web Server 用户
+chown -R nginx:nginx "$SSL_DIR" 2>/dev/null || chown -R www-data:www-data "$SSL_DIR" 2>/dev/null || true
+
 # --- 7. 设置全量自动续期脚本 (支持多域名汇总通知) ---
 cat << EOF > /root/renew_cert.sh
 #!/bin/bash
@@ -171,17 +184,17 @@ chmod +x /root/renew_cert.sh
 (crontab -l 2>/dev/null | grep -v "renew_cert.sh"; echo "0 0 1 * * /root/renew_cert.sh > /dev/null 2>&1") | crontab -
 
 # --- 8. 完成推送 (中文排版) ---
-SUCCESS_MSG="✅ <b>SSL 证书签发成功！</b>
+SUCCESS_MSG="✅ <b>SSL 证书签发并部署成功！</b>
 ━━━━━━━━━━━━━━
 <b>域名：</b> <code>$DOMAIN</code>
 <b>方式：</b> $([ "$AUTH_METHOD" == "2" ] && echo "DNS API" || echo "HTTP 80")
 <b>有效期：</b> 90天 (已设每月 1 号自动续期)
-<b>证书位置：</b> <code>/root/${DOMAIN}.crt</code>
-<b>私钥位置：</b> <code>/root/${DOMAIN}.key</code>
+<b>证书位置：</b> <code>${SSL_DIR}/${DOMAIN}.crt</code>
+<b>私钥位置：</b> <code>${SSL_DIR}/${DOMAIN}.key</code>
 <b>签发时间：</b> $(date '+%Y-%m-%d %H:%M:%S')"
 
 send_tg "$SUCCESS_MSG"
 
-echo "✅ 任务完成！证书已保存在 /root 目录。"
-echo "📄 证书路径: /root/${DOMAIN}.crt"
-echo "🔐 私钥路径: /root/${DOMAIN}.key"
+echo "✅ 任务完成！证书已保存在 /root 和 $SSL_DIR 目录。"
+echo "📄 证书路径: ${SSL_DIR}/${DOMAIN}.crt"
+echo "🔐 私钥路径: ${SSL_DIR}/${DOMAIN}.key"
